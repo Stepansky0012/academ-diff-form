@@ -45,6 +45,7 @@
   fieldset { border: 0; margin: 0 0 20px; padding: 0; }
   legend { font-weight: 600; font-size: 15px; padding: 0 0 6px; }
   .hint { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
+  .optional { color: var(--muted); font-weight: normal; }
   label.field { display: block; margin: 0 0 14px; }
   label.field > span { display: block; margin-bottom: 5px; font-weight: 500; }
   select, input[type=text], input[type=number], textarea {
@@ -126,11 +127,15 @@
 </fieldset>
 
 <fieldset>
-  <legend>Дисциплины из документа</legend>
+  <legend>Дисциплины <span class="optional">— можно не заполнять</span></legend>
   <p class="hint">
-    Часы обязательны: без них дисциплина участвует в сопоставлении, но целевую строку
-    закрыть не может. Оценка нужна не для красоты — по ней выводится форма контроля,
-    без которой перезачёт не проходит вовсе.
+    <b>Оставьте пустым, если пришлёте справку боту</b> — он прочитает дисциплины сам
+    и покажет разобранное до расчёта. Заполняйте здесь, только если документа нет
+    под рукой или прочитанное нужно поправить.
+  </p>
+  <p class="hint">
+    Если заполняете: часы дают строке шанс закрыть целевую, оценка задаёт форму
+    контроля. Без них дисциплина в расчёт войдёт, но перезачесть ничего не сможет.
   </p>
   <table>
     <thead><tr><th>Наименование</th><th>Часы</th><th>Оценка</th><th></th></tr></thead>
@@ -411,9 +416,17 @@ function problems() {
   else if (current && !current.file) list.push("бланк для этого кода (см. выше)");
   if (!$("direction").value) list.push("направление");
   if (!$("profileField").hidden && !$("profile").value) list.push("профиль");
+  // Перечень НЕОБЯЗАТЕЛЕН (FR-025.1): пустой означает «дисциплины возьми из
+  // документа». Требовать его здесь значило бы заставлять перебивать руками
+  // ту самую справку, ради чтения которой система и существует.
+  //
+  // Заполненный проверяется по-прежнему: часы хотя бы у одной строки. Строки
+  // без часов в расчёт войдут, но целевую закрыть не смогут, и перечень
+  // целиком без часов — это не ввод, а его видимость.
   const rows = courses();
-  if (!rows.length) list.push("хотя бы одна дисциплина");
-  else if (!rows.some((r) => /\d/.test(r.hours))) list.push("часы хотя бы у одной дисциплины");
+  if (rows.length && !rows.some((r) => /\d/.test(r.hours))) {
+    list.push("часы хотя бы у одной дисциплины");
+  }
   return list;
 }
 
