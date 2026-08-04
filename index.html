@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Первичные данные для расчёта АР</title>
+<!--
+  ШАБЛОН СТРАНИЦЫ. Справочник вшивается сборкой: miniapp/build_page.py заменяет
+  метки __CATALOG__ и __QUESTIONS__. Правится ЭТОТ файл, а не form.html —
+  собранный перезаписывается при каждой сборке.
+
+  Почему справочник вшит, а не запрашивается: расчётный контур привязан к
+  локальному узлу и наружу не публикуется (FR-027), и открытая на телефоне
+  страница до него не достанет.
+
+  Единственный внешний запрос — SDK Telegram: без него мини-приложение не может
+  отдать данные боту. В браузере он не нужен, и страница работает без него:
+  ответ уходит через буфер обмена (тот же разбор в боте).
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff; --fg: #14181f; --muted: #6b7480;
+    --line: #dfe3e8; --card: #f6f7f9;
+    --accent: #2f81f7; --accent-fg: #ffffff;
+    --bad: #c0392b; --ok: #1e8e3e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181c; --fg: #e8eaed; --muted: #9aa0a6;
+      --line: #2f3136; --card: #1f2126;
+      --accent: #4c8dff; --accent-fg: #0b0c10;
+      --bad: #ff6b5e; --ok: #56c271;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px 16px 96px;
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.45 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+  }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  fieldset { border: 0; margin: 0 0 20px; padding: 0; }
+  legend { font-weight: 600; font-size: 15px; padding: 0 0 6px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
+  label.field { display: block; margin: 0 0 14px; }
+  label.field > span { display: block; margin-bottom: 5px; font-weight: 500; }
+  select, input[type=text], input[type=number], textarea {
+    width: 100%; padding: 10px 11px; font: inherit; color: var(--fg);
+    background: var(--card); border: 1px solid var(--line); border-radius: 9px;
+  }
+  select:disabled { opacity: .5; }
+  textarea { min-height: 84px; resize: vertical; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    flex: 1 1 auto; position: relative;
+    border: 1px solid var(--line); border-radius: 9px; background: var(--card);
+    padding: 10px 12px; cursor: pointer; text-align: center; white-space: nowrap;
+  }
+  .chip input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+  .chip.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .chip small { display: block; color: var(--muted); font-size: 11px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 500; padding: 0 4px 4px; }
+  td { padding: 0 4px 6px 0; vertical-align: top; }
+  td.h { width: 78px; } td.g { width: 92px; } td.x { width: 30px; }
+  .drop {
+    border: 0; background: transparent; color: var(--muted);
+    font-size: 19px; line-height: 1; cursor: pointer; padding: 8px 4px;
+  }
+  button.add, button.paste {
+    margin-top: 6px; padding: 9px 12px; font: inherit; cursor: pointer;
+    background: var(--card); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 9px;
+  }
+  .bar {
+    position: fixed; left: 0; right: 0; bottom: 0; padding: 12px 16px;
+    background: var(--bg); border-top: 1px solid var(--line);
+  }
+  button.go {
+    width: 100%; padding: 14px; font: inherit; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: var(--accent-fg); border: 0; border-radius: 11px;
+  }
+  button.go[disabled] { opacity: .45; cursor: default; }
+  .say { margin: 10px 0 0; font-size: 13px; }
+  .say.bad { color: var(--bad); } .say.ok { color: var(--ok); }
+  .refusal { border-left: 3px solid var(--bad); padding: 8px 12px; background: var(--card); }
+  .out { display: none; margin-top: 12px; }
+  .out textarea { min-height: 120px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .legal { color: var(--muted); font-size: 12px; margin-top: 18px; }
+</style>
+</head>
+<body>
+
+<h1>Первичные данные для расчёта</h1>
+<div class="sub" id="head"></div>
+
+<fieldset>
+  <legend>Условие зачисления</legend>
+  <p class="hint">Из карточки заявки. Задаёт правила допуска и форму итога.</p>
+  <div class="chips" id="mode"></div>
+</fieldset>
+
+<fieldset>
+  <legend>Вид документа</legend>
+  <p class="hint">Задаёт правило перезачёта: диплом СПО и справка вуза считаются по-разному.</p>
+  <label class="field"><select id="document"></select></label>
+</fieldset>
+
+<fieldset>
+  <legend>Программа и направление</legend>
+  <p class="hint">Код программы выбирает файл бланка; направление и профиль — только те, что в нём есть.</p>
+  <div class="chips" id="code"></div>
+  <div id="refusal" class="refusal say bad" hidden></div>
+  <label class="field" style="margin-top:14px">
+    <span>Направление подготовки</span>
+    <select id="direction" disabled><option value="">— сначала код программы —</option></select>
+  </label>
+  <label class="field" id="profileField" hidden>
+    <span>Профиль</span>
+    <select id="profile"></select>
+  </label>
+  <p class="hint" id="semesters"></p>
+</fieldset>
+
+<fieldset>
+  <legend>Дисциплины из документа</legend>
+  <p class="hint">
+    Часы обязательны: без них дисциплина участвует в сопоставлении, но целевую строку
+    закрыть не может. Оценка нужна не для красоты — по ней выводится форма контроля,
+    без которой перезачёт не проходит вовсе.
+  </p>
+  <table>
+    <thead><tr><th>Наименование</th><th>Часы</th><th>Оценка</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <button class="add" type="button" id="add">+ строка</button>
+  <button class="paste" type="button" id="pasteToggle">Вставить из Excel</button>
+  <div id="pasteBox" hidden style="margin-top:10px">
+    <textarea id="pasteArea" placeholder="История&#9;108&#9;4&#10;Философия&#9;72&#9;зачёт"></textarea>
+    <button class="add" type="button" id="pasteApply">Разобрать в строки</button>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>Примечание</legend>
+  <label class="field">
+    <textarea id="note" placeholder="Что не разобрать, что вызывает сомнения. Пишется человеку, а не расчёту."></textarea>
+  </label>
+</fieldset>
+
+<p class="legal">
+  ФИО, дату рождения и паспортные данные вводить не нужно: обращение опознаётся
+  номером заявки. Результат предварительный и подлежит проверке методистом.
+</p>
+
+<div class="bar">
+  <button class="go" type="button" id="send">Отправить в бота</button>
+  <div class="say" id="say"></div>
+  <div class="out" id="out">
+    <textarea id="payload" readonly></textarea>
+    <button class="add" type="button" id="copy">Скопировать</button>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+const CATALOG = {"generated": "2026-08-04", "blanks": "Шаблоны бланков АР", "codes": [{"code": "ЗОсДОТп", "kindTitle": "ВО 4,6", "file": "Расчет АР ВО 4,6 1с 26-27.xlsx", "reason": null, "directions": [{"name": "Архитектура", "profiles": [], "semesters": ["2-3 сем"]}, {"name": "Дизайн", "profiles": [], "semesters": ["2-3 сем"]}, {"name": "Жилищное хозяйство и ком. инфраструктура", "profiles": [], "semesters": ["2-3 сем", "4-5 сем"]}, {"name": "Информационные системы и технологии", "profiles": ["Разработка и тестирование программного обеспечения", "Разработка, сопровождение и обеспечение безопасности информационных систем", "Технологии искусственного интеллекта"], "semesters": ["2-3 сем", "4-5 сем", "6-7 сем", "8-9 семестр"]}, {"name": "Менеджмент", "profiles": ["Антикризисное управление", "Государственная служба", "Интернет-маркетинг", "Информационный менеджмент", "Логистика", "Маркетинг", "Менеджмент в гостиничном и ресторанном бизнесе", "Менеджмент в здравоохранении", "Менеджмент в машиностроении", "Менеджмент в нефтегазовом комплексе", "Менеджмент в образовании", "Менеджмент в правовой сфере", "Менеджмент в строительстве", "Менеджмент в энергетике", "Предпринимательство", "Спортивный менеджмент", "Управление государственным и муниципальным сектором", "Управление малым бизнесом", "Управление проектами", "Управление технологическими инновациями", "Управление человеческими ресурсами", "Финансовый менеджмент"], "semesters": ["2-3 сем", "4-5 сем", "6-7 сем", "8-9 сем"]}, {"name": "Нефтегазовое дело", "profiles": [], "semesters": ["2-3 сем"]}, {"name": "Педагогическое образование", "profiles": ["Информатика и информационные технологии в образовании", "Педагогическое проектирование образовательного контента", "Психология и педагогика начального образования"], "semesters": ["2-3 сем", "4-5 сем", "6-7 сем", "8-9 семестр"]}, {"name": "Прикладная информатика", "profiles": ["Вычислительные машины, комплексы, системы и сети", "Интернет технологии и мобильные приложения", "Информационный менеджмент", "Прикладная информатика в экономике"], "semesters": ["2-3 сем", "4-5 сем", "6-7 сем", "8-9 сем"]}, {"name": "Прикладная математика и информатика", "profiles": [], "semesters": ["2-3 сем"]}, {"name": "Психология", "profiles": ["Практическая психология"], "semesters": ["2-3 сем", "4-5 сем"]}, {"name": "Строительство", "profiles": ["Автомобильные дороги", "Архитектурное проектирование", "Водоснабжение и водоотведение", "Городское строительство и хозяйство", "Менеджмент в коммунальном хозяйстве и недвижимости", "Проектирование зданий", "Производство строительных материалов, изделий и конструкций", "Промышленное и гражданское строительство", "Строительство и эксплуатация объектов нефтегазовой отрасли", "Теплогазоснабжение и вентиляция", "Экономика и управление в строительстве", "Экспертиза и управление недвижимостью"], "semesters": ["1 сем", "2-3 сем", "4-5 сем", "6-7 сем", "8-9 сем"]}, {"name": "Теплоэнергетика и теплотехника", "profiles": ["Автоматизация технологических процессов и производств", "Промышленная теплоэнергетика"], "semesters": ["2-3 сем", "4-5 сем", "6-7 сем", "8-9 сем"]}, {"name": "Технологические машины и оборудование", "profiles": ["Технологические машины и оборудование в промышленности"], "semesters": ["2-3 сем", "4-5 сем"]}, {"name": "Техносферная безопасность", "profiles": ["Безопасность технологических процессов и производств", "Безопасность труда", "Инжиниринг и цифровизация в техносферной безопасности", "Пожарная безопасность"], "semesters": ["2-3 сем", "4-5 сем", "6-7 сем", "8-9 сем"]}, {"name": "Управление в технических системах", "profiles": ["Интеллектуальные средства обработки информации", "Качество и управление в технических системах", "Комплексные системы безопасности", "Робототехника и искусственный интеллект", "Системы и средства автоматизации технологических процессов"], "semesters": ["2-3 сем", "4-5 сем", "6-7 семестр", "8-9 сем"]}, {"name": "Экономика", "profiles": ["Банковское дело", "Бухгалтерский учет, анализ и аудит", "Мировая экономика", "Налоги и налогообложение", "Финансы и кредит", "Экономика горной промышленности", "Экономика предприятий и организаций"], "semesters": ["2-3 сем", "4-5 сем", "6-7 сем", "8-9 сем"]}, {"name": "Экономическая безопасность", "profiles": [], "semesters": ["2-3 сем", "4-5 сем", "6-7 сем", "8-11 семестр"]}, {"name": "Электроэнергетика и электротехника", "profiles": ["Электрооборудование и электрохозяйство предприятий", "Электроснабжение производственных объектов", "Электроэнергетические системы и сети"], "semesters": ["2-3 сем", "4-5 сем", "6-7 сем", "8-9 сем"]}]}, {"code": "ЗОсДОТс", "kindTitle": "ВО 3,6", "file": "Расчет АР ВО 3,6 1с 26-27.xlsx", "reason": null, "directions": [{"name": "Архитектура", "profiles": [], "semesters": ["1 сем", "2-3 сем"]}, {"name": "Дизайн", "profiles": ["Дизайн среды и интерьера", "Промышленный дизайн"], "semesters": ["1 сем", "2-3 сем"]}, {"name": "Жилищное хозяйство и ком. инфраструктура", "profiles": [], "semesters": ["2-3 сем", "4-5 сем"]}, {"name": "Жилищное хозяйство и коммунальная инфраструктура", "profiles": [], "semesters": ["1 сем"]}, {"name": "Информационные системы и технологии", "profiles": ["Кибербезопасность в информационных системах", "Разработка и тестирование программного обеспечения", "Разработка, сопровождение и обеспечение безопасности информационных систем", "Технологии искусственного интеллекта"], "semesters": ["1 сем", "2-3 сем", "4-5 сем", "6-7 сем"]}, {"name": "Менеджмент", "profiles": ["Антикризисное управление", "Государственная служба", "Интернет-маркетинг", "Информационный менеджмент", "Логистика", "Маркетинг", "Менеджмент в гостиничном и ресторанном бизнесе", "Менеджмент в здравоохранении", "Менеджмент в машиностроении", "Менеджмент в нефтегазовом комплексе", "Менеджмент в образовании", "Менеджмент в правовой сфере", "Менеджмент в строительстве", "Менеджмент в энергетике", "Предпринимательство", "Спортивный менеджмент", "Управление государственным и муниципальным сектором", "Управление малым бизнесом", "Управление проектами", "Управление технологическими инновациями", "Управление человеческими ресурсами", "Финансовый менеджмент"], "semesters": ["1 сем", "2-3 сем", "4-5 сем", "6-7 сем"]}, {"name": "Нефтегазовое дело", "profiles": [], "semesters": ["1 сем", "2-3 сем"]}, {"name": "Педагогическое образование", "profiles": ["Информатика и информационные технологии в образовании", "Педагогическое проектирование образовательного контента", "Преподаватель управленческих, экономических и правовых дисциплин", "Психология и педагогика начального образования", "Психология развития"], "semesters": ["1 сем", "2-3 сем", "4-5 сем", "6-7 сем"]}, {"name": "Прикладная информатика", "profiles": ["Вычислительные машины, комплексы, системы и сети", "Интернет технологии и мобильные приложения", "Информационный менеджмент", "Прикладная информатика в экономике", "Управление информационными системами"], "semesters": ["1 сем", "2-3 сем", "4-5 сем", "6-7 сем"]}, {"name": "Прикладная математика и информатика", "profiles": [], "semesters": ["1 сем", "2-3 сем"]}, {"name": "Психология", "profiles": ["Клиническая психология и психологическое консультирование", "Практическая психология"], "semesters": ["1 сем", "2-3 сем", "4-5 сем"]}, {"name": "Строительство", "profiles": ["Автомобильные дороги", "Архитектурное проектирование", "Водоснабжение и водоотведение", "Городское строительство и хозяйство", "Менеджмент в коммунальном хозяйстве и недвижимости", "Проектирование зданий", "Производство строительных материалов, изделий и конструкций", "Промышленное и гражданское строительство", "Строительство и эксплуатация объектов нефтегазовой отрасли", "Теплогазоснабжение и вентиляция", "Экономика и управление в строительстве", "Экспертиза и управление недвижимостью"], "semesters": ["1 сем", "2-3 сем", "4-5 сем", "6-7 сем"]}, {"name": "Теплоэнергетика и теплотехника", "profiles": ["Автоматизация технологических процессов и производств", "Автономные энергетические системы", "Промышленная теплоэнергетика", "Холодоснабжение, вентиляция и кондиционирование", "Экономика и управление в теплоэнергетике"], "semesters": ["1 сем", "2-3 сем", "4-5 сем", "6-7 сем"]}, {"name": "Технологические машины и оборудование", "profiles": ["Технологические машины и оборудование в промышленности"], "semesters": ["1 сем", "2-3 сем", "3-4 сем"]}, {"name": "Техносферная безопасность", "profiles": ["Безопасность технологических процессов и производств", "Безопасность труда", "Инжиниринг и цифровизация в техносферной безопасности", "Пожарная безопасность", "Промышленная безопасность", "Экологическая безопасность", "Экономика и управление в техносферной безопасности"], "semesters": ["1 сем", "2-3 сем", "4-5 сем", "6-7 сем"]}, {"name": "Управление в технических системах", "profiles": ["Интеллектуальные средства обработки информации", "Интеллектуальные технологии управления производством в нефтегазовой отрасли", "Качество и управление в технических системах", "Комплексные системы безопасности", "Робототехника и искусственный интеллект", "Системы и средства автоматизации технологических процессов"], "semesters": ["1 сем", "2-3 сем", "4-5 сем", "6-7 сем"]}, {"name": "Экономика", "profiles": ["Банковское дело", "Бухгалтерский учет, анализ и аудит", "Мировая экономика", "Налоги и налогообложение", "Финансы и кредит", "Экономика горной промышленности", "Экономика предприятий и организаций"], "semesters": ["1 сем", "2-3 сем", "4-5 сем", "6-7 сем"]}, {"name": "Экономическая безопасность", "profiles": [], "semesters": ["1 сем", "2-3 сем", "4-5 сем", "6-7 сем", "8-9 сем"]}, {"name": "Электроэнергетика и электротехника", "profiles": ["Автоматизированные системы управления электроэнергетических систем и комплексов", "Экономика и управление в электроэнергетике", "Электрооборудование и электрохозяйство предприятий", "Электроснабжение производственных объектов", "Электроэнергетические системы и сети"], "semesters": ["1 сем", "2-3 сем", "4-5 сем", "6-7 сем"]}]}, {"code": "ОсДОТп", "kindTitle": "ОсДОТ (Вебинары)", "file": "Расчет АР ОсДОТ (Вебинары) 1с 26-27.xlsx", "reason": null, "directions": [{"name": "ИСиП (специалист по информац. системам)", "profiles": [], "semesters": ["3 сем", "5 сем"]}, {"name": "ИСиТ", "profiles": ["Разработка, сопровождение и обеспечение безопасности ИС"], "semesters": ["3 сем", "5 сем"]}, {"name": "Менеджмент", "profiles": ["Управление проектами"], "semesters": ["3 сем", "5 сем", "7 сем"]}, {"name": "Оператор информационных систем и ресурсов", "profiles": [], "semesters": ["2 сем"]}, {"name": "Педагогическое образование", "profiles": ["Психология и педагогика начального образования"], "semesters": ["3 сем", "5 сем"]}, {"name": "Прикладная информатика", "profiles": ["Вычислительные машины, комплексы, системы и сети"], "semesters": ["3 сем", "5 сем", "7 сем"]}, {"name": "Психология", "profiles": ["Практическая психология"], "semesters": ["3 сем"]}, {"name": "Строительство", "profiles": ["Промышленное и гражданское строительство"], "semesters": ["3 сем", "5 сем", "7 сем"]}, {"name": "Торговое дело, 11кл", "profiles": [], "semesters": ["3 сем"]}, {"name": "Управление в технических системах", "profiles": [], "semesters": ["3 сем"]}, {"name": "Экономика", "profiles": ["Экономика предприятий и организаций"], "semesters": ["3 сем", "5 сем"]}, {"name": "Электроэнергетика и электротехника", "profiles": [], "semesters": ["3 сем", "5 сем"]}]}, {"code": "ПКО", "kindTitle": "ПКО", "file": "Расчет АР ПКО 1с 26-27.xlsx", "reason": null, "directions": [{"name": "Архитектура", "profiles": ["Архитектурное проектирование"], "semesters": ["1 сем"]}, {"name": "Банковское дело", "profiles": [], "semesters": ["4 сем, 11 кл"]}, {"name": "ИСиП (специалист по информац. системам)", "profiles": [], "semesters": ["3 сем, 11 кл", "3 сем, 9 кл", "5 сем, 11 кл", "5 сем, 9 кл"]}, {"name": "Информационные системы и технологии", "profiles": ["Разработка, сопровождение и обеспечение безопасности информационных систем"], "semesters": ["3 сем", "5 сем"]}, {"name": "Менеджмент", "profiles": ["Управление проектами"], "semesters": ["3 сем", "5 сем", "7 сем"]}, {"name": "Нефтегазовое дело", "profiles": ["Эксплуатация и обслуживание объектов транспорта и хранения нефти, газа и продуктов переработки"], "semesters": ["1 сем"]}, {"name": "Оператор информационных систем и ресурсов", "profiles": [], "semesters": ["ОИСиР 2"]}, {"name": "Педагогическое образование", "profiles": ["Психология и педагогика начального образования"], "semesters": ["3 сем", "5 сем"]}, {"name": "Прикладная информатика", "profiles": ["Вычислительные машины, комплексы, системы и сети"], "semesters": ["3 сем", "5 сем", "7 сем"]}, {"name": "Психология", "profiles": ["Практическая психология"], "semesters": ["3 сем"]}, {"name": "Строительство и эксплуатация зданий и сооружений", "profiles": ["Промышленное и гражданское строительство"], "semesters": ["3 сем", "3 сем, 9 кл", "5 сем", "7 сем"]}, {"name": "Техносферная безопасность", "profiles": ["Инжиниринг и цифровизация в техносферной безопасности"], "semesters": ["2 сем"]}, {"name": "Торговое дело", "profiles": [], "semesters": ["3 сем, 11 кл", "3 сем, 9 кл", "5 сем, 9 кл"]}, {"name": "Экономика", "profiles": ["Банковское дело", "Экономика предприятий и организаций"], "semesters": ["3 сем", "5 сем", "7 сем"]}, {"name": "Электроэнергетика и электротехника", "profiles": ["Электрооборудование и электрохозяйство предприятий"], "semesters": ["3 сем"]}]}, {"code": "ПВО", "kindTitle": "ПВО ВО", "file": "Расчет АР ПВО ВО 1с 26-27.xlsx", "reason": null, "directions": [{"name": "ИСиТ", "profiles": ["Профиль: Разработка, сопровождение и обеспечение безопасности информационных систем"], "semesters": ["3 сем", "5 сем"]}, {"name": "Менеджмент", "profiles": ["Профиль - Управление проектами", "Профиль: Управление проектами"], "semesters": ["3 сем", "5 сем", "7 сем"]}, {"name": "Педагогическое образование", "profiles": ["Профиль: Психология и педагогика начального образования"], "semesters": ["3 сем"]}, {"name": "Прикладная информатика", "profiles": ["Профиль: Вычислительные машины, комплексы, системы и сети"], "semesters": ["3 сем", "5 сем", "7 сем"]}, {"name": "Психология", "profiles": ["Профиль: Практическая психология"], "semesters": ["3 сем"]}, {"name": "Строительство", "profiles": ["Профиль:Промышленное и гражданское строительство"], "semesters": ["3 сем", "5 сем", "7 сем"]}, {"name": "Экономика", "profiles": ["Профиль: Банковское дело", "Профиль: Экономика предприятий и организаций"], "semesters": ["3 сем", "5 сем", "7 сем"]}, {"name": "Электроэнергетика и электротехника", "profiles": ["Профиль: Электрооборудование и электрохозяйство предприятий", "Профиль:Электрооборудование и электрохозяйство предприятий"], "semesters": ["3 сем", "5 сем", "7 сем"]}]}]};
+const QUESTIONS = {"ticket": "Номер заявки (1С АКАДА или Битрикс)", "mode": "Условие зачисления", "document": "Вид документа абитуриента", "code": "Код программы обучения", "direction": "Направление подготовки", "profile": "Профиль", "courses": "Дисциплины из документа: наименование, часы, оценка", "note": "Примечание (необязательно)"};
+
+const MODES = ["ПП — в порядке перевода", "ИП — индивидуальный план"];
+const DOCUMENT_KINDS = [
+  "Справка об обучении (вуз)",
+  "Приложение к диплому СПО",
+  "Приложение к диплому ВО",
+  "Аттестат о среднем общем образовании",
+  "Другое — опишу в примечании",
+];
+
+// Предел sendData у Telegram — 4096 байт. Молча обрезать нельзя: обрезанный
+// перечень выглядит полным, и разница выйдет завышенной без всякого признака.
+const SEND_LIMIT = 4096;
+
+const tg = window.Telegram && window.Telegram.WebApp ? window.Telegram.WebApp : null;
+const $ = (id) => document.getElementById(id);
+const ticket = new URLSearchParams(location.search).get("ticket") || "";
+
+// ── Тема Telegram, если она есть ─────────────────────────────────────────────
+if (tg) {
+  tg.ready();
+  tg.expand();
+  const p = tg.themeParams || {};
+  const set = (name, value) => value && document.documentElement.style.setProperty(name, value);
+  set("--bg", p.bg_color); set("--fg", p.text_color); set("--muted", p.hint_color);
+  set("--card", p.secondary_bg_color); set("--accent", p.button_color);
+  set("--accent-fg", p.button_text_color);
+}
+
+$("head").textContent =
+  (ticket ? "Обращение " + ticket + " · " : "") +
+  "бланки: " + CATALOG.blanks + " · выгрузка " + CATALOG.generated;
+
+// ── Переключатели ────────────────────────────────────────────────────────────
+// Элементы строятся createElement, а подписи ставятся textContent, а не
+// innerHTML: названия направлений и профилей приходят ИЗ БЛАНКОВ, то есть из
+// данных. Знак «<» в названии сломал бы разметку, и поломка выглядела бы как
+// пропавший вариант выбора.
+function chips(host, items, name, onPick) {
+  host.replaceChildren();
+  items.forEach((item) => {
+    const label = document.createElement("label");
+    label.className = "chip";
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = name;
+    input.value = item.value;
+    const title = document.createElement("b");
+    title.textContent = item.label;
+    label.appendChild(input);
+    label.appendChild(title);
+    if (item.note) {
+      const note = document.createElement("small");
+      note.textContent = item.note;
+      label.appendChild(note);
+    }
+    input.addEventListener("change", () => {
+      [...host.children].forEach((c) => c.classList.toggle("on", c === label));
+      onPick(item.value);
+    });
+    host.appendChild(label);
+  });
+}
+
+chips($("mode"), MODES.map((m) => ({ label: m.split(" — ")[0], note: m.split(" — ")[1], value: m })),
+  "mode", () => validate());
+
+DOCUMENT_KINDS.forEach((kind) => {
+  const option = document.createElement("option");
+  option.value = kind;
+  option.textContent = kind;
+  $("document").appendChild(option);
+});
+
+chips(
+  $("code"),
+  CATALOG.codes.map((c) => ({
+    label: c.code,
+    note: c.file ? c.kindTitle : "бланка нет",
+    value: c.code,
+  })),
+  "code",
+  pickCode
+);
+
+let current = null;
+
+function pickCode(code) {
+  current = CATALOG.codes.find((c) => c.code === code) || null;
+  const refusal = $("refusal");
+  // Пустой список обязан объясняться причиной, а не пустым выбором (FR-023).
+  if (current && !current.file) {
+    refusal.hidden = false;
+    refusal.textContent = "Бланка для этого кода нет: " + (current.reason || "причина не названа") +
+      ". Расчёт по нему невозможен — сообщите в отдел расчёта.";
+  } else {
+    refusal.hidden = true;
+  }
+  const select = $("direction");
+  select.innerHTML = "";
+  const options = current && current.file ? current.directions : [];
+  select.disabled = options.length === 0;
+  select.appendChild(new Option(options.length ? "— выберите —" : "— нет направлений —", ""));
+  options.forEach((d) => select.appendChild(new Option(d.name, d.name)));
+  pickDirection("");
+  validate();
+}
+
+$("direction").addEventListener("change", (event) => pickDirection(event.target.value));
+
+function pickDirection(name) {
+  const entry = current && current.directions.find((d) => d.name === name);
+  const field = $("profileField");
+  const select = $("profile");
+  select.innerHTML = "";
+  if (entry && entry.profiles.length) {
+    field.hidden = false;
+    select.appendChild(new Option("— выберите —", ""));
+    entry.profiles.forEach((p) => select.appendChild(new Option(p, p)));
+  } else {
+    // Лист профилей не различает — вопрос не задаётся вовсе: выбор с
+    // единственным вариантом «без профиля» это клик ни за чем.
+    field.hidden = true;
+  }
+  $("semesters").textContent = entry && entry.semesters.length
+    ? "Листы в бланке: " + entry.semesters.join(", ") +
+      ". Какой применить — определит расчёт, он перебирает варианты и показывает исход каждого."
+    : "";
+  validate();
+}
+
+$("profile").addEventListener("change", validate);
+
+// ── Дисциплины ───────────────────────────────────────────────────────────────
+function addRow(name, hours, grade) {
+  const tr = document.createElement("tr");
+  const cells = [
+    { cls: "n", value: name, placeholder: "Наименование" },
+    { cls: "h", value: hours, placeholder: "108", mode: "decimal" },
+    { cls: "g", value: grade, placeholder: "4 / зачёт" },
+  ].map((spec) => {
+    const td = document.createElement("td");
+    if (spec.cls !== "n") td.className = spec.cls;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = spec.cls;
+    input.value = spec.value || "";
+    input.placeholder = spec.placeholder;
+    if (spec.mode) input.inputMode = spec.mode;
+    input.addEventListener("input", validate);
+    td.appendChild(input);
+    return td;
+  });
+  const drop = document.createElement("td");
+  drop.className = "x";
+  const button = document.createElement("button");
+  button.className = "drop";
+  button.type = "button";
+  button.title = "убрать";
+  button.textContent = "×";
+  button.addEventListener("click", () => {
+    tr.remove();
+    // Последняя строка не удаляется в пустоту: без единого поля ввода добавить
+    // дисциплину было бы нечем, и страница выглядела бы сломанной.
+    if (!$("rows").children.length) addRow();
+    validate();
+  });
+  drop.appendChild(button);
+  cells.concat(drop).forEach((td) => tr.appendChild(td));
+  $("rows").appendChild(tr);
+  return tr;
+}
+
+for (let i = 0; i < 3; i += 1) addRow();
+$("add").addEventListener("click", () => addRow().querySelector("input.n").focus());
+
+$("pasteToggle").addEventListener("click", () => {
+  const box = $("pasteBox");
+  box.hidden = !box.hidden;
+  if (!box.hidden) $("pasteArea").focus();
+});
+
+$("pasteApply").addEventListener("click", () => {
+  const lines = $("pasteArea").value.split(/\r?\n/);
+  let added = 0;
+  lines.forEach((line) => {
+    const parts = line.split(/\t|\||;/).map((p) => p.trim());
+    if (!parts[0]) return;
+    addRow(parts[0], parts[1] || "", parts[2] || "");
+    added += 1;
+  });
+  // Пустые заготовки убираются, чтобы вставленное не пряталось между ними.
+  [...$("rows").children].forEach((tr) => {
+    if (!tr.querySelector("input.n").value.trim()) tr.remove();
+  });
+  if (!$("rows").children.length) addRow();
+  $("pasteArea").value = "";
+  $("pasteBox").hidden = true;
+  say(added ? "Разобрано строк: " + added + ". Проверьте часы." : "Разбирать нечего.", added ? "ok" : "bad");
+  validate();
+});
+
+function courses() {
+  return [...$("rows").children]
+    .map((tr) => ({
+      name: tr.querySelector("input.n").value.trim(),
+      hours: tr.querySelector("input.h").value.trim(),
+      grade: tr.querySelector("input.g").value.trim(),
+    }))
+    .filter((row) => row.name);
+}
+
+function coursesText() {
+  // Тот же вид, что разбирает бот: «наименование | часы | оценка».
+  //
+  // Пустые поля срезаются С КОНЦА, а не отовсюду: место значимо. Пустые часы при
+  // заполненной оценке обязаны остаться пустой колонкой — иначе «зачёт» встанет
+  // на место часов, а «5» превратится в пять часов и молча уйдёт в расчёт.
+  return courses()
+    .map((row) => {
+      const cells = [row.name, row.hours, row.grade];
+      while (cells.length > 1 && cells[cells.length - 1] === "") cells.pop();
+      return cells.join(" | ");
+    })
+    .join("\n");
+}
+
+// ── Проверка и отправка ──────────────────────────────────────────────────────
+function selected(name) {
+  const input = document.querySelector('input[name="' + name + '"]:checked');
+  return input ? input.value : "";
+}
+
+function problems() {
+  const list = [];
+  if (!selected("mode")) list.push("условие зачисления");
+  if (!$("document").value) list.push("вид документа");
+  if (!selected("code")) list.push("код программы");
+  else if (current && !current.file) list.push("бланк для этого кода (см. выше)");
+  if (!$("direction").value) list.push("направление");
+  if (!$("profileField").hidden && !$("profile").value) list.push("профиль");
+  const rows = courses();
+  if (!rows.length) list.push("хотя бы одна дисциплина");
+  else if (!rows.some((r) => /\d/.test(r.hours))) list.push("часы хотя бы у одной дисциплины");
+  return list;
+}
+
+function say(text, kind) {
+  const node = $("say");
+  node.textContent = text || "";
+  node.className = "say" + (kind ? " " + kind : "");
+}
+
+function validate() {
+  const list = problems();
+  $("send").disabled = list.length > 0;
+  if (list.length) say("Не заполнено: " + list.join(", "), "");
+  else say("");
+  return list.length === 0;
+}
+
+function payload() {
+  const answers = {};
+  answers[QUESTIONS.ticket] = ticket;
+  answers[QUESTIONS.mode] = selected("mode");
+  answers[QUESTIONS.document] = $("document").value;
+  const code = selected("code");
+  answers[QUESTIONS.code] = current && current.kindTitle
+    ? code + " — бланк «" + current.kindTitle + "»"
+    : code;
+  answers[QUESTIONS.direction] = $("direction").value;
+  if (!$("profileField").hidden) answers[QUESTIONS.profile] = $("profile").value;
+  answers[QUESTIONS.courses] = coursesText();
+  const note = $("note").value.trim();
+  if (note) answers[QUESTIONS.note] = note;
+  return JSON.stringify(answers);
+}
+
+function showForCopy(text, reason) {
+  $("out").style.display = "block";
+  $("payload").value = text;
+  say(reason, "");
+}
+
+$("copy").addEventListener("click", async () => {
+  const text = $("payload").value;
+  try {
+    await navigator.clipboard.writeText(text);
+    say("Скопировано. Вставьте в чат с ботом.", "ok");
+  } catch (error) {
+    $("payload").select();
+    say("Скопируйте выделенное вручную: " + error, "bad");
+  }
+});
+
+$("send").addEventListener("click", () => {
+  if (!validate()) return;
+  const text = payload();
+  const bytes = new TextEncoder().encode(text).length;
+
+  if (tg && typeof tg.sendData === "function" && bytes <= SEND_LIMIT) {
+    tg.sendData(text);   // Telegram закроет страницу сам и отдаст данные боту.
+    return;
+  }
+  // Обрезать перечень нельзя: обрезанный выглядит полным, и разница выйдет
+  // завышенной без всякого признака. Поэтому длинное уходит через буфер.
+  showForCopy(
+    text,
+    !tg
+      ? "Страница открыта не из Telegram: скопируйте и вставьте в чат с ботом."
+      : bytes > SEND_LIMIT
+        ? "Перечень длиннее предела Telegram (" + bytes + " из " + SEND_LIMIT +
+          " байт): отправьте через буфер — скопируйте и вставьте в чат."
+        : "Отправка из Telegram недоступна: скопируйте и вставьте в чат."
+  );
+});
+
+validate();
+</script>
+</body>
+</html>
