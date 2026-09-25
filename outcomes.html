@@ -61,7 +61,7 @@
   }
   body.tg { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
   .demo {
-    background: var(--q-bg); color: var(--q); border-radius: 10px;
+    background: var(--card); color: var(--muted); border: 1px dashed var(--line); border-radius: 10px;
     padding: 8px 12px; font-size: 13px; margin-bottom: 10px;
   }
   .head { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 4px 0 8px; }
@@ -85,7 +85,11 @@
   }
   .rec.v { --c: var(--v); --cb: var(--v-bg); } .rec.m { --c: var(--m); --cb: var(--m-bg); }
   .rec.q { --c: var(--q); --cb: var(--q-bg); } .rec.x { --c: var(--x); --cb: var(--x-bg); }
-  .rec.marked { box-shadow: 0 0 0 2px var(--accent); }
+  .rec.marked { box-shadow: 0 0 0 2px var(--fg); }
+  .rec.marked .name::after { content: " · отмечено"; font-weight: 500; font-size: 12px; color: var(--muted); }
+  .diff { background: var(--card); border-radius: 12px; padding: 4px 12px; margin: 10px 0; font-size: 14px; }
+  .diff summary { cursor: pointer; padding: 6px 0; font-weight: 560; }
+  .diff li { margin: 3px 0; }
   .top { display: flex; gap: 8px; align-items: flex-start; }
   .ico { color: var(--c); font-weight: 700; width: 18px; flex: none; text-align: center; }
   .name { font-weight: 560; flex: 1; word-break: break-word; }
@@ -144,6 +148,7 @@
 </div>
 
 <div id="refusal" class="say bad" hidden></div>
+<div id="diff"></div>
 <div id="spec"></div>
 <div id="list"></div>
 <details class="more" id="moreWrap" hidden><summary id="moreTitle"></summary><div id="more"></div></details>
@@ -202,12 +207,12 @@ const DEMO = {
     { i: 0, n: "Химия", h: 72, c: "зачёт", k: "T", o: "x", w: "no_similar_row" },
     { i: 1, n: "Биология", h: 72, c: "зачёт", k: "T", o: "x", w: "no_similar_row" },
     { i: 2, n: "Деловые коммуникации", h: 108, c: "зачёт с оценкой", k: "T", o: "?", q: [0] },
-    { i: 3, n: "История России", h: 144, c: "экзамен", k: "T", o: "m", q: [4], b: { who: "оператор 1", at: "2026-09-19" } },
-    { i: 4, n: "Математика", h: 288, c: "экзамен", k: "T", o: "v", q: [7] },
-    { i: 5, n: "Физическая культура", h: 328, c: "зачёт", k: "T", o: "v", q: [12] },
+    { i: 3, n: "История России", h: 144, c: "экзамен", k: "T", o: "m", q: [4], p: ["История"], b: { who: "оператор 1", at: "2026-09-19" } },
+    { i: 4, n: "Математика", h: 288, c: "экзамен", k: "T", o: "v", q: [7], p: ["Высшая математика"] },
+    { i: 5, n: "Физическая культура", h: 328, c: "зачёт", k: "T", o: "v", q: [12], p: ["Физическая культура и спорт"] },
     { i: 6, n: "Основы организации производства", h: 54, c: "зачёт", k: "T", o: "x", w: "candidate_hours",
       e: "часов у записи 54 при пороге строки 65", q: [2] },
-    { i: 7, n: "Информатика", h: 108, c: "зачёт", k: "T", o: "v", q: [9] },
+    { i: 7, n: "Информатика", h: 108, c: "зачёт", k: "T", o: "v", q: [9], p: ["Информатика"] },
   ],
   a: [
     { j: 17, n: "Русский язык и культура речи", h: 72, c: "зачёт", m: 1 },
@@ -293,7 +298,7 @@ let data = null;
 const marks = new Map();      // i → {op, i, j}
 const added = [];             // {op:"add", n, h, c, k}
 const specialty = new Map();  // k → bool
-let filter = new Set(["?", "x"]);
+let filter = new Set(["?", "x", "m"]);  // синие видны сразу: применяются сами, но не молча (FR-003.6)
 
 const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -319,6 +324,27 @@ function setMark(i, mark) {
   transport.tick(); render(); refreshMain();
 }
 
+function rowSelect(r, chosen, placeholder) {
+  const sel = el("select");
+  sel.append(new Option(placeholder, ""));
+  for (const row of data.a || []) sel.append(new Option(row.n + " · " + row.h + " ч · " + row.m + " сем", String(row.j)));
+  if (chosen != null) sel.value = String(chosen);
+  sel.onchange = () => setMark(r.i, sel.value ? { op: "link", i: r.i, j: Number(sel.value) } : null);
+  return sel;
+}
+
+function renderDiff() {
+  // «Видела итоговый расчёт, и к нему комментарий» (расшифровка, стр. 159–160):
+  // строки, которые сейчас в разнице, — то, что студент будет досдавать.
+  const box = $("diff"); box.textContent = "";
+  const rows = data.a || [];
+  if (!rows.length) return;
+  const det = el("details", "diff"); det.append(el("summary", "", "В разнице сейчас: " + rows.length + " " + plural(rows.length, "строка", "строки", "строк")));
+  const ul = el("ul");
+  for (const row of rows) ul.append(el("li", "", row.n + " · " + row.h + " ч · " + (row.c || "форма не указана") + " · " + row.m + " сем"));
+  det.append(ul); box.append(det);
+}
+
 function recordCard(r) {
   const card = el("div", "rec " + KEY[r.o]);
   if (marks.has(r.i)) card.classList.add("marked");
@@ -332,10 +358,10 @@ function recordCard(r) {
   const acts = el("div", "acts");
   const mark = marks.get(r.i);
   if (r.o === "v") {
-    if (r.q && r.q.length) card.append(el("div", "why", "закрывает строку " + r.q.join(", ")));
+    card.append(el("div", "why", "закрывает: " + ((r.p && r.p.length) ? r.p.map((n) => "«" + n + "»").join(", ") : "строку " + (r.q || []).join(", "))));
   } else if (r.o === "m") {
     const who = r.b ? (r.b.who || "кем — не записано") + (r.b.at ? " · " + r.b.at : "") : "кем — не записано";
-    card.append(el("div", "why", "запомненная пара: " + who));
+    card.append(el("div", "why", "закрывает " + ((r.p && r.p.length) ? "«" + r.p[0] + "»" : "строку " + (r.q || []).join(", ")) + " по запомненной паре · " + who));
     const j = (r.q || [0])[0];
     const undo = el("button", mark && mark.op === "undo_memory" ? "on" : "", "Отменить здесь");
     undo.onclick = () => setMark(r.i, mark && mark.op === "undo_memory" ? null : { op: "undo_memory", i: r.i, j });
@@ -352,14 +378,12 @@ function recordCard(r) {
     const no = el("button", mark && mark.op === "reject" ? "on" : "", "✗ Разные");
     no.onclick = () => setMark(r.i, mark && mark.op === "reject" ? null : { op: "reject", i: r.i, j });
     acts.append(yes, no);
+    // Кандидат бота может быть не тем: «деловые коммуникации сложно понять, что это
+    // русский» (расшифровка, стр. 170–171) — значит и другая строка должна быть выбираема.
+    acts.append(rowSelect(r, mark && mark.op === "link" && mark.j !== j ? mark.j : null, "Другая строка плана…"));
   } else {
     card.append(el("div", "why", r.e || REASONS[r.w] || "в расчёт не вошла"));
-    const sel = el("select");
-    sel.append(new Option("Закрывает строку плана…", ""));
-    for (const row of data.a || []) sel.append(new Option(row.n + " · " + row.h + " ч · " + row.m + " сем", String(row.j)));
-    if (mark && mark.op === "link") sel.value = String(mark.j);
-    sel.onchange = () => setMark(r.i, sel.value ? { op: "link", i: r.i, j: Number(sel.value) } : null);
-    acts.append(sel);
+    acts.append(rowSelect(r, mark && mark.op === "link" ? mark.j : null, "Закрывает строку плана…"));
   }
   if (acts.children.length) card.append(acts);
   return card;
@@ -379,7 +403,7 @@ function render() {
   const order = { "?": 0, x: 1, m: 2, v: 3 };
   const shown = data.r.filter((r) => filter.has(r.o)).sort((a, b) => order[a.o] - order[b.o] || a.i - b.i);
   if (!data.r.length) list.append(el("div", "empty", "В документе не прочитано ни одной записи."));
-  else if (!counts["?"] && !counts.x && filter.has("?") && filter.has("x") && filter.size === 2)
+  else if (!counts["?"] && !counts.x && filter.has("?") && filter.has("x"))
     list.append(el("div", "empty", "Не взятых записей нет: все записи справки зачтены.")); // FR-001.9
   for (const r of shown) list.append(recordCard(r));
   const hidden = data.r.length - shown.length;
@@ -455,6 +479,7 @@ async function main() {
   $("target").textContent = [g.s, g.p, g.m ? "посадка в " + g.m + " семестр" : "", g.f].filter(Boolean).join(" · ");
   $("ar").innerHTML = "";
   $("ar").append(document.createTextNode("АР " + data.d + " "), el("small", "", "промежуточный расчёт"));
+  renderDiff();
   renderSpecialty();
   setupAdd();
   render();
