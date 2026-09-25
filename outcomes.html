@@ -53,7 +53,7 @@
     --q: #a86b00; --q-bg: #fdf3dd; --x: #c0392b; --x-bg: #fbe9e7;
   }
   * { box-sizing: border-box; }
-  html, body { overscroll-behavior-y: contain; }
+  html, body { overscroll-behavior-y: contain; max-width: 100%; overflow-x: hidden; }
   body {
     margin: 0; padding: 12px 16px calc(96px + env(safe-area-inset-bottom));
     background: var(--bg); color: var(--fg);
@@ -65,10 +65,10 @@
     padding: 8px 12px; font-size: 13px; margin-bottom: 10px;
   }
   .head { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 4px 0 8px; }
-  .target { font-size: 13px; color: var(--muted); }
+  .target { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
   .ar { font-size: 20px; font-weight: 650; margin: 2px 0 8px; }
   .ar small { font-size: 13px; font-weight: 500; color: var(--muted); }
-  .filters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .filters { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
   .f {
     border: 1px solid var(--line); background: var(--card); color: var(--fg);
     border-radius: 10px; padding: 6px 4px; font: inherit; font-size: 12px; cursor: pointer;
@@ -96,13 +96,13 @@
     font: inherit; font-size: 14px; border-radius: 9px; padding: 8px 10px; cursor: pointer;
     border: 1px solid var(--line); background: var(--bg); color: var(--fg);
   }
-  .acts select { flex: 1 1 100%; min-width: 0; }
+  .acts select { flex: 1 1 100%; width: 100%; min-width: 0; max-width: 100%; text-overflow: ellipsis; }
   .acts button.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
   details.more { margin: 10px 0; }
   details.more summary { color: var(--muted); cursor: pointer; padding: 6px 0; }
   .add { background: var(--card); border-radius: 12px; padding: 12px; margin: 14px 0; }
   .add h3 { font-size: 15px; margin: 0 0 8px; }
-  .add .row { display: grid; grid-template-columns: 1fr 84px; gap: 6px; margin-bottom: 6px; }
+  .add .row { display: grid; grid-template-columns: minmax(0, 1fr) 96px; gap: 6px; margin-bottom: 6px; }
   .add input, .add select {
     width: 100%; font: inherit; padding: 9px 10px; border-radius: 9px;
     border: 1px solid var(--line); background: var(--bg); color: var(--fg);
@@ -299,7 +299,8 @@ const $ = (id) => document.getElementById(id);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 function say(text, kind) { const s = $("say"); s.hidden = !text; s.textContent = text || ""; s.className = "say " + (kind || ""); }
 
-function rowName(j) { const r = (data.a || []).find((x) => x.j === j); return r ? r.n : "строка " + j; }
+// q у жёлтых и красных — ИНДЕКСЫ в data.a (договор), а в отметку уходит номер строки листа j.
+function openRow(k) { return (data.a || [])[k] || null; }
 function markCount() { return marks.size + added.length + specialty.size; }
 
 function refreshMain() {
@@ -342,8 +343,10 @@ function recordCard(r) {
     forget.onclick = () => setMark(r.i, mark && mark.op === "forget" ? null : { op: "forget", i: r.i, j });
     acts.append(undo, forget);
   } else if (r.o === "?") {
-    const j = (r.q || [])[0];
-    card.append(el("div", "why", "похоже на «" + rowName(j) + "»"));
+    const row = openRow((r.q || [])[0]);
+    if (!row) { card.append(el("div", "why", "строка-кандидат не передана")); card.append(acts); return card; }
+    const j = row.j;
+    card.append(el("div", "why", "похоже на «" + row.n + "» · " + row.h + " ч · " + row.m + " сем"));
     const yes = el("button", mark && mark.op === "link" ? "on" : "", "✓ Та же дисциплина");
     yes.onclick = () => setMark(r.i, mark && mark.op === "link" ? null : { op: "link", i: r.i, j });
     const no = el("button", mark && mark.op === "reject" ? "on" : "", "✗ Разные");
