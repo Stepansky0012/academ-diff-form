@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Чек-лист исходов</title>
+<!--
+  СТРАНИЦА ИСХОДОВ (009/FR-001.4.1). Вторая страница мини-приложения; первая —
+  страница ввода (form.template.html). Правится ЭТОТ файл; outcomes.html
+  собирается из него miniapp/build_page.py.
+
+  УСТРОЙСТВО (research Р-12): ядро страницы про Telegram не знает ничего.
+  Связь с окружением — через сменный ТРАНСПОРТ:
+    telegram — тема из themeParams, MainButton/BackButton, ответ через sendData;
+    browser  — своя кнопка, ответ в буфер обмена (тот же разбор в боте).
+  Другой интерфейс (CRM, интранет, приложение) — ещё один транспорт, а не
+  новая страница.
+
+  ДАННЫЕ ДЕЛА приходят во ФРАГМЕНТЕ адреса: #v1.<base64url(deflate-raw(json))>
+  (contracts/outcomes-link.md). Фрагмент браузер на сервер хостинга не шлёт —
+  названия дисциплин дела не попадают в его журнал. Без фрагмента страница
+  показывает выдуманное демонстрационное дело и прямо говорит об этом.
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff; --fg: #14181f; --muted: #6b7480; --line: #dfe3e8; --card: #f6f7f9;
+    --accent: #2f81f7; --accent-fg: #ffffff;
+    /* Четыре смысловых цвета исходов. Цвет — не единственный признак: у каждого
+       исхода ещё значок и подпись (research Р-8). */
+    --v: #1e8e3e; --v-bg: #e8f5ec;
+    --m: #1f6fd1; --m-bg: #e7f0fc;
+    --q: #a86b00; --q-bg: #fdf3dd;
+    --x: #c0392b; --x-bg: #fbe9e7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181c; --fg: #e8eaed; --muted: #9aa0a6; --line: #2f3136; --card: #1f2126;
+      --accent: #4c8dff; --accent-fg: #0b0c10;
+      --v: #56c271; --v-bg: #16291c;
+      --m: #6aa8ff; --m-bg: #132236;
+      --q: #f0b54a; --q-bg: #2e2412;
+      --x: #ff7b6e; --x-bg: #33191a;
+    }
+  }
+  :root[data-scheme=dark] {
+    --v: #56c271; --v-bg: #16291c; --m: #6aa8ff; --m-bg: #132236;
+    --q: #f0b54a; --q-bg: #2e2412; --x: #ff7b6e; --x-bg: #33191a;
+  }
+  :root[data-scheme=light] {
+    --v: #1e8e3e; --v-bg: #e8f5ec; --m: #1f6fd1; --m-bg: #e7f0fc;
+    --q: #a86b00; --q-bg: #fdf3dd; --x: #c0392b; --x-bg: #fbe9e7;
+  }
+  * { box-sizing: border-box; }
+  html, body { overscroll-behavior-y: contain; }
+  body {
+    margin: 0; padding: 12px 16px calc(96px + env(safe-area-inset-bottom));
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.4 -apple-system, "Segoe UI", Roboto, system-ui, sans-serif;
+  }
+  body.tg { padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+  .demo {
+    background: var(--q-bg); color: var(--q); border-radius: 10px;
+    padding: 8px 12px; font-size: 13px; margin-bottom: 10px;
+  }
+  .head { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 4px 0 8px; }
+  .target { font-size: 13px; color: var(--muted); }
+  .ar { font-size: 20px; font-weight: 650; margin: 2px 0 8px; }
+  .ar small { font-size: 13px; font-weight: 500; color: var(--muted); }
+  .filters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .f {
+    border: 1px solid var(--line); background: var(--card); color: var(--fg);
+    border-radius: 10px; padding: 6px 4px; font: inherit; font-size: 12px; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 1px;
+  }
+  .f b { font-size: 17px; }
+  .f.on { outline: 2px solid currentColor; outline-offset: -2px; }
+  .f.v { color: var(--v); } .f.m { color: var(--m); } .f.q { color: var(--q); } .f.x { color: var(--x); }
+  .f span { color: var(--muted); }
+  .empty { color: var(--muted); text-align: center; padding: 24px 8px; }
+  .rec {
+    border-radius: 12px; padding: 10px 12px; margin: 8px 0;
+    border-left: 4px solid var(--c); background: var(--cb);
+  }
+  .rec.v { --c: var(--v); --cb: var(--v-bg); } .rec.m { --c: var(--m); --cb: var(--m-bg); }
+  .rec.q { --c: var(--q); --cb: var(--q-bg); } .rec.x { --c: var(--x); --cb: var(--x-bg); }
+  .rec.marked { box-shadow: 0 0 0 2px var(--accent); }
+  .top { display: flex; gap: 8px; align-items: flex-start; }
+  .ico { color: var(--c); font-weight: 700; width: 18px; flex: none; text-align: center; }
+  .name { font-weight: 560; flex: 1; word-break: break-word; }
+  .meta { color: var(--muted); font-size: 13px; margin: 2px 0 0 26px; }
+  .why { font-size: 13px; margin: 4px 0 0 26px; }
+  .acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0 26px; }
+  .acts button, .acts select {
+    font: inherit; font-size: 14px; border-radius: 9px; padding: 8px 10px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  }
+  .acts select { flex: 1 1 100%; min-width: 0; }
+  .acts button.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  details.more { margin: 10px 0; }
+  details.more summary { color: var(--muted); cursor: pointer; padding: 6px 0; }
+  .add { background: var(--card); border-radius: 12px; padding: 12px; margin: 14px 0; }
+  .add h3 { font-size: 15px; margin: 0 0 8px; }
+  .add .row { display: grid; grid-template-columns: 1fr 84px; gap: 6px; margin-bottom: 6px; }
+  .add input, .add select {
+    width: 100%; font: inherit; padding: 9px 10px; border-radius: 9px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  }
+  .add button {
+    font: inherit; padding: 9px 12px; border-radius: 9px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+  }
+  .added { font-size: 13px; margin-top: 8px; }
+  .added div { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; }
+  .added button { border: 0; background: none; color: var(--x); font-size: 18px; cursor: pointer; }
+  .spec { background: var(--card); border-radius: 12px; padding: 10px 12px; margin: 10px 0; font-size: 14px; }
+  .spec label { display: flex; gap: 8px; align-items: center; }
+  .bar {
+    position: fixed; left: 0; right: 0; bottom: 0; padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+    background: var(--bg); border-top: 1px solid var(--line);
+  }
+  body.tg .bar { display: none; }
+  .bar button {
+    width: 100%; padding: 14px; font: inherit; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: var(--accent-fg); border: 0; border-radius: 11px;
+  }
+  .say { font-size: 13px; margin: 8px 0; }
+  .say.bad { color: var(--x); } .say.ok { color: var(--v); }
+  .out textarea {
+    width: 100%; min-height: 110px; font: 12px ui-monospace, Consolas, monospace;
+    background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 9px;
+  }
+</style>
+</head>
+<body>
+
+<div id="demo" class="demo" hidden>Демонстрация: дело выдуманное. Настоящее дело откроется кнопкой из бота.</div>
+
+<div class="head">
+  <div class="target" id="target"></div>
+  <div class="ar" id="ar"></div>
+  <div class="filters" id="filters"></div>
+</div>
+
+<div id="refusal" class="say bad" hidden></div>
+<div id="spec"></div>
+<div id="list"></div>
+<details class="more" id="moreWrap" hidden><summary id="moreTitle"></summary><div id="more"></div></details>
+
+<div class="add" id="addBox">
+  <h3>Добавить запись, которой нет в прочитанном</h3>
+  <div class="row">
+    <input id="addName" type="text" placeholder="Наименование, как в документе" maxlength="200">
+    <input id="addHours" type="number" inputmode="decimal" placeholder="часы" min="1" max="2000">
+  </div>
+  <div class="row">
+    <select id="addForm"></select>
+    <select id="addKind"><option value="T">справка</option><option value="S">диплом СПО</option></select>
+  </div>
+  <button type="button" id="addBtn">Добавить</button>
+  <div class="say bad" id="addSay" hidden></div>
+  <div class="added" id="added"></div>
+</div>
+
+<div class="say" id="say" hidden></div>
+<div class="out" id="out" hidden>
+  <p class="say">Страница открыта не из Telegram: скопируйте ответ и вставьте его в чат с ботом.</p>
+  <textarea id="outText" readonly></textarea>
+</div>
+
+<div class="bar"><button type="button" id="go"></button></div>
+
+<script>
+"use strict";
+
+// ═══ Договор (contracts/outcomes-link.md, outcomes-marks.json) ═══════════════
+const SEND_LIMIT = 4096; // предел sendData: молча обрезать нельзя
+const FORMS = ["экзамен", "зачёт с оценкой", "зачёт", "без ИМ", "оценка без названной формы"];
+const STATUS = {
+  v: { ico: "✓", title: "зачтено" },
+  m: { ico: "↺", title: "по памяти" },
+  "?": { ico: "?", title: "под вопросом" },
+  x: { ico: "✗", title: "не взято" },
+};
+const KEY = { v: "v", m: "m", "?": "q", x: "x" };
+const REASONS = {
+  no_similar_row: "в плане нет похожей дисциплины",
+  candidate_hours: "не хватает часов для похожей строки",
+  candidate_form: "не подходит форма контроля",
+  row_covered_by_other: "похожая строка уже закрыта другой записью",
+  row_beyond_seat: "похожая строка — в семестре зачисления или позже, в разницу не входит",
+  row_without_final: "похожая строка без итогового мероприятия, в разницу не входит",
+  refused: "пара отклонена ранее",
+};
+
+// Выдуманное дело: показывается, когда данных во фрагменте нет.
+const DEMO = {
+  t: "ДЕМО:0:000000", g: { f: "Расчет АР ВО 4 года 1с 26-27", s: "Строительство 2-3", p: "ПГС", m: 3 },
+  d: 7,
+  r: [
+    { i: 0, n: "Химия", h: 72, c: "зачёт", k: "T", o: "x", w: "no_similar_row" },
+    { i: 1, n: "Биология", h: 72, c: "зачёт", k: "T", o: "x", w: "no_similar_row" },
+    { i: 2, n: "Деловые коммуникации", h: 108, c: "зачёт с оценкой", k: "T", o: "?", q: [0] },
+    { i: 3, n: "История России", h: 144, c: "экзамен", k: "T", o: "m", q: [4], b: { who: "оператор 1", at: "2026-09-19" } },
+    { i: 4, n: "Математика", h: 288, c: "экзамен", k: "T", o: "v", q: [7] },
+    { i: 5, n: "Физическая культура", h: 328, c: "зачёт", k: "T", o: "v", q: [12] },
+    { i: 6, n: "Основы организации производства", h: 54, c: "зачёт", k: "T", o: "x", w: "candidate_hours",
+      e: "часов у записи 54 при пороге строки 65", q: [2] },
+    { i: 7, n: "Информатика", h: 108, c: "зачёт", k: "T", o: "v", q: [9] },
+  ],
+  a: [
+    { j: 17, n: "Русский язык и культура речи", h: 72, c: "зачёт", m: 1 },
+    { j: 21, n: "Химия в строительстве", h: 72, c: "зачёт", m: 1 },
+    { j: 25, n: "Основы организации и управления в строительстве", h: 108, c: "зачёт с оценкой", m: 2 },
+    { j: 28, n: "Экология", h: 72, c: "зачёт", m: 2 },
+  ],
+  sp: ["T"],
+};
+
+async function decode(fragment) {
+  const m = /^#v(\d+)\.([A-Za-z0-9_-]+)$/.exec(fragment || "");
+  if (!m) return null;
+  if (m[1] !== "1") throw new Error("страница устарела: данные версии " + m[1] + ", страница знает версию 1 — обновите страницу");
+  if (typeof DecompressionStream !== "function") throw new Error("этот клиент Telegram не умеет разжимать данные — обновите приложение");
+  const b64 = m[2].replace(/-/g, "+").replace(/_/g, "/");
+  const bin = atob(b64 + "===".slice((b64.length + 3) % 4));
+  const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return JSON.parse(await new Response(stream).text());
+}
+
+// ═══ Транспорты (research Р-12) ═════════════════════════════════════════════
+function telegramTransport(tg) {
+  let backHandler = null;
+  return {
+    name: "telegram",
+    start() {
+      tg.ready(); tg.expand();
+      if (tg.disableVerticalSwipes) tg.disableVerticalSwipes();
+      const p = tg.themeParams || {};
+      const set = (k, v) => v && document.documentElement.style.setProperty(k, v);
+      set("--bg", p.bg_color); set("--fg", p.text_color); set("--muted", p.hint_color);
+      set("--card", p.secondary_bg_color); set("--accent", p.button_color); set("--accent-fg", p.button_text_color);
+      document.documentElement.dataset.scheme = tg.colorScheme === "dark" ? "dark" : "light";
+      document.body.classList.add("tg");
+      tg.MainButton.onClick(() => onSubmit());
+    },
+    setMain(text, enabled) {
+      tg.MainButton.setText(text);
+      enabled ? tg.MainButton.enable() : tg.MainButton.disable();
+      tg.MainButton.show();
+    },
+    progress(on) { on ? tg.MainButton.showProgress(false) : tg.MainButton.hideProgress(); },
+    setBack(handler) {
+      if (backHandler) tg.BackButton.offClick(backHandler);
+      backHandler = handler;
+      if (handler) { tg.BackButton.onClick(handler); tg.BackButton.show(); } else tg.BackButton.hide();
+    },
+    tick() { tg.HapticFeedback && tg.HapticFeedback.selectionChanged(); },
+    send(text) {
+      tg.HapticFeedback && tg.HapticFeedback.notificationOccurred("success");
+      tg.sendData(text); // Telegram закроет страницу сам; бот ответит в переписке
+    },
+  };
+}
+
+function browserTransport() {
+  const go = document.getElementById("go");
+  return {
+    name: "browser",
+    start() { go.addEventListener("click", () => onSubmit()); },
+    setMain(text, enabled) { go.textContent = text; go.disabled = !enabled; },
+    progress() {},
+    setBack() {},
+    tick() {},
+    send(text) {
+      document.getElementById("out").hidden = false;
+      const area = document.getElementById("outText");
+      area.value = text; area.focus(); area.select();
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(
+        () => say("Ответ скопирован — вставьте его в чат с ботом.", "ok"),
+        () => say("Скопируйте ответ из поля ниже и вставьте в чат с ботом.", ""));
+    },
+  };
+}
+
+const tgApp = window.Telegram && window.Telegram.WebApp;
+const transport = tgApp && tgApp.initData ? telegramTransport(tgApp) : browserTransport();
+
+// ═══ Ядро страницы: про транспорт знает только через transport.* ════════════
+let data = null;
+const marks = new Map();      // i → {op, i, j}
+const added = [];             // {op:"add", n, h, c, k}
+const specialty = new Map();  // k → bool
+let filter = new Set(["?", "x"]);
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+function say(text, kind) { const s = $("say"); s.hidden = !text; s.textContent = text || ""; s.className = "say " + (kind || ""); }
+
+function rowName(j) { const r = (data.a || []).find((x) => x.j === j); return r ? r.n : "строка " + j; }
+function markCount() { return marks.size + added.length + specialty.size; }
+
+function refreshMain() {
+  const n = markCount();
+  transport.setMain(n ? "Пересчитать (" + n + " " + plural(n, "отметка", "отметки", "отметок") + ")" : "Итог без правок", true);
+}
+function plural(n, one, few, many) {
+  const a = n % 10, b = n % 100;
+  if (a === 1 && b !== 11) return one;
+  if (a >= 2 && a <= 4 && (b < 12 || b > 14)) return few;
+  return many;
+}
+
+function setMark(i, mark) {
+  if (mark) marks.set(i, mark); else marks.delete(i);
+  transport.tick(); render(); refreshMain();
+}
+
+function recordCard(r) {
+  const card = el("div", "rec " + KEY[r.o]);
+  if (marks.has(r.i)) card.classList.add("marked");
+  const top = el("div", "top");
+  top.append(el("span", "ico", STATUS[r.o].ico), el("span", "name", r.n));
+  card.append(top);
+  const meta = [r.h ? r.h + " ч" : "часы не указаны", r.c || "форма не указана", r.k === "S" ? "диплом СПО" : "справка"];
+  if (r.u) meta.push("внесена сотрудником");
+  card.append(el("div", "meta", STATUS[r.o].title + " · " + meta.join(" · ")));
+
+  const acts = el("div", "acts");
+  const mark = marks.get(r.i);
+  if (r.o === "v") {
+    if (r.q && r.q.length) card.append(el("div", "why", "закрывает строку " + r.q.join(", ")));
+  } else if (r.o === "m") {
+    const who = r.b ? (r.b.who || "кем — не записано") + (r.b.at ? " · " + r.b.at : "") : "кем — не записано";
+    card.append(el("div", "why", "запомненная пара: " + who));
+    const j = (r.q || [0])[0];
+    const undo = el("button", mark && mark.op === "undo_memory" ? "on" : "", "Отменить здесь");
+    undo.onclick = () => setMark(r.i, mark && mark.op === "undo_memory" ? null : { op: "undo_memory", i: r.i, j });
+    const forget = el("button", mark && mark.op === "forget" ? "on" : "", "Забыть пару");
+    forget.onclick = () => setMark(r.i, mark && mark.op === "forget" ? null : { op: "forget", i: r.i, j });
+    acts.append(undo, forget);
+  } else if (r.o === "?") {
+    const j = (r.q || [])[0];
+    card.append(el("div", "why", "похоже на «" + rowName(j) + "»"));
+    const yes = el("button", mark && mark.op === "link" ? "on" : "", "✓ Та же дисциплина");
+    yes.onclick = () => setMark(r.i, mark && mark.op === "link" ? null : { op: "link", i: r.i, j });
+    const no = el("button", mark && mark.op === "reject" ? "on" : "", "✗ Разные");
+    no.onclick = () => setMark(r.i, mark && mark.op === "reject" ? null : { op: "reject", i: r.i, j });
+    acts.append(yes, no);
+  } else {
+    card.append(el("div", "why", r.e || REASONS[r.w] || "в расчёт не вошла"));
+    const sel = el("select");
+    sel.append(new Option("Закрывает строку плана…", ""));
+    for (const row of data.a || []) sel.append(new Option(row.n + " · " + row.h + " ч · " + row.m + " сем", String(row.j)));
+    if (mark && mark.op === "link") sel.value = String(mark.j);
+    sel.onchange = () => setMark(r.i, sel.value ? { op: "link", i: r.i, j: Number(sel.value) } : null);
+    acts.append(sel);
+  }
+  if (acts.children.length) card.append(acts);
+  return card;
+}
+
+function render() {
+  const counts = { v: 0, m: 0, "?": 0, x: 0 };
+  for (const r of data.r) counts[r.o]++;
+  const f = $("filters"); f.textContent = "";
+  for (const o of ["?", "x", "m", "v"]) {
+    const b = el("button", "f " + KEY[o] + (filter.has(o) ? " on" : ""));
+    b.append(el("b", "", STATUS[o].ico + " " + counts[o]), el("span", "", STATUS[o].title));
+    b.onclick = () => { filter.has(o) ? filter.delete(o) : filter.add(o); transport.tick(); render(); };
+    f.append(b);
+  }
+  const list = $("list"); list.textContent = "";
+  const order = { "?": 0, x: 1, m: 2, v: 3 };
+  const shown = data.r.filter((r) => filter.has(r.o)).sort((a, b) => order[a.o] - order[b.o] || a.i - b.i);
+  if (!data.r.length) list.append(el("div", "empty", "В документе не прочитано ни одной записи."));
+  else if (!counts["?"] && !counts.x && filter.has("?") && filter.has("x") && filter.size === 2)
+    list.append(el("div", "empty", "Не взятых записей нет: все записи справки зачтены.")); // FR-001.9
+  for (const r of shown) list.append(recordCard(r));
+  const hidden = data.r.length - shown.length;
+  $("moreWrap").hidden = !hidden;
+  $("moreTitle").textContent = "Скрыто фильтром: " + hidden;
+  const more = $("more"); more.textContent = "";
+  if (hidden) for (const r of data.r.filter((x) => !filter.has(x.o))) more.append(recordCard(r));
+
+  const added$ = $("added"); added$.textContent = "";
+  added.forEach((a, k) => {
+    const row = el("div"); row.append(el("span", "", "+ " + a.n + " · " + a.h + " ч · " + a.c));
+    const del = el("button", "", "×"); del.setAttribute("aria-label", "убрать");
+    del.onclick = () => { added.splice(k, 1); transport.tick(); render(); refreshMain(); };
+    row.append(del); added$.append(row);
+  });
+}
+
+function renderSpecialty() {
+  const box = $("spec"); box.textContent = "";
+  for (const k of data.sp || []) {
+    const wrap = el("div", "spec"); const lab = el("label"); const cb = el("input"); cb.type = "checkbox";
+    cb.onchange = () => { specialty.set(k, cb.checked); transport.tick(); refreshMain(); };
+    lab.append(cb, el("span", "", "Направление предыдущего обучения совпадает (" + (k === "S" ? "диплом СПО" : "справка") + ")"));
+    wrap.append(lab); box.append(wrap);
+  }
+}
+
+function setupAdd() {
+  for (const f of FORMS) $("addForm").append(new Option(f, f));
+  $("addBtn").onclick = () => {
+    const n = $("addName").value.trim(), h = Number($("addHours").value);
+    const bad = n.length < 2 ? "Впишите наименование." : !(h > 0 && h <= 2000) ? "Часы — число от 1 до 2000." : "";
+    $("addSay").hidden = !bad; $("addSay").textContent = bad;
+    if (bad) return;
+    added.push({ op: "add", n, h, c: $("addForm").value, k: $("addKind").value });
+    $("addName").value = ""; $("addHours").value = "";
+    transport.tick(); render(); refreshMain();
+  };
+  $("addName").addEventListener("focus", () => transport.setBack(() => { $("addName").blur(); transport.setBack(null); }));
+}
+
+function answer() {
+  const list = [...marks.values(), ...added];
+  for (const [k, val] of specialty) list.push({ op: "specialty", k, val });
+  const out = { kind: "outcomes", v: 1, t: data.t, marks: list };
+  if (!list.length) out.final_without_marks = true;
+  return JSON.stringify(out);
+}
+
+function onSubmit() {
+  if (!data) return;
+  const text = answer();
+  const bytes = new TextEncoder().encode(text).length;
+  if (bytes > SEND_LIMIT) {
+    say("Ответ длиннее предела Telegram на " + (bytes - SEND_LIMIT) + " байт. Уберите часть добавленных записей и отправьте вторым ответом.", "bad");
+    return;
+  }
+  transport.progress(true);
+  transport.send(text);
+  transport.progress(false);
+}
+
+async function main() {
+  transport.start();
+  try {
+    data = await decode(location.hash);
+  } catch (err) {
+    $("refusal").hidden = false; $("refusal").textContent = "Не удалось открыть перечень: " + err.message;
+    return;
+  }
+  if (!data) { data = DEMO; $("demo").hidden = false; }
+  const g = data.g || {};
+  $("target").textContent = [g.s, g.p, g.m ? "посадка в " + g.m + " семестр" : "", g.f].filter(Boolean).join(" · ");
+  $("ar").innerHTML = "";
+  $("ar").append(document.createTextNode("АР " + data.d + " "), el("small", "", "промежуточный расчёт"));
+  renderSpecialty();
+  setupAdd();
+  render();
+  refreshMain();
+}
+main();
+</script>
+</body>
+</html>
