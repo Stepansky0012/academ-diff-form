@@ -18,8 +18,9 @@
 
   ДАННЫЕ ДЕЛА приходят во ФРАГМЕНТЕ адреса: #v1.<base64url(deflate-raw(json))>
   (contracts/outcomes-link.md). Фрагмент браузер на сервер хостинга не шлёт —
-  названия дисциплин дела не попадают в его журнал. Без фрагмента страница
-  показывает выдуманное демонстрационное дело и прямо говорит об этом.
+  названия дисциплин дела не попадают в его журнал. Без фрагмента или с
+  повреждённым фрагментом рабочая страница отказывает; выдуманное дело доступно
+  только явным demo=1 для локальной проверки и не отправляет рабочий ответ.
 -->
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
@@ -131,15 +132,18 @@
   }
   .say { font-size: 13px; margin: 8px 0; }
   .say.bad { color: var(--x); } .say.ok { color: var(--v); }
+  body.locked .head, body.locked #diff, body.locked #spec, body.locked #list,
+  body.locked #moreWrap, body.locked #addBox, body.locked #say, body.locked #out,
+  body.locked .bar { display: none; }
   .out textarea {
     width: 100%; min-height: 110px; font: 12px ui-monospace, Consolas, monospace;
     background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 9px;
   }
 </style>
 </head>
-<body>
+<body class="locked">
 
-<div id="demo" class="demo" hidden>Демонстрация: дело выдуманное. Настоящее дело откроется кнопкой из бота.</div>
+<div id="demo" class="demo" hidden>ДЕМО — не рабочее дело. Этот пример не отправляет рабочий ответ.</div>
 
 <div class="head">
   <div class="target" id="target"></div>
@@ -199,7 +203,8 @@ const REASONS = {
   refused: "пара отклонена ранее",
 };
 
-// Выдуманное дело: показывается, когда данных во фрагменте нет.
+// Выдуманное дело: только явный локальный режим ?demo=1. Рабочая страница без
+// корректного фрагмента отказывает, чтобы не подменить настоящее дело примером.
 const DEMO = {
   t: "ДЕМО:0:000000", g: { f: "Расчет АР ВО 4 года 1с 26-27", s: "Строительство 2-3", p: "ПГС", m: 3 },
   d: 7,
@@ -223,16 +228,85 @@ const DEMO = {
   sp: ["T"],
 };
 
+function recordError(reason) {
+  // Только фиксированный класс отказа и длина: fragment/payload/названия не логируются.
+  const classes = new Set(["empty", "malformed", "unknown_version", "decode", "schema"]);
+  const safeReason = classes.has(reason) ? reason : "decode";
+  console.warn("outcomes-open", {
+    version: 1,
+    reason: safeReason,
+    fragment_length: Math.min((location.hash || "").length, 10000),
+  });
+}
+
+function validatePayload(data) {
+  const fail = () => { throw new Error("schema"); };
+  const integer = (n) => Number.isSafeInteger(n);
+  const text = (s) => typeof s === "string" && s.trim().length > 0;
+  const forms = new Set(["", "экзамен", "зачёт с оценкой", "зачёт", "без ИМ", "оценка без названной формы"]);
+  if (!data || typeof data !== "object" || Array.isArray(data)) fail();
+  // Producer contract: ticket:epoch:first-six-SHA1-hex-fingerprint.
+  if (!text(data.t) || !/^[^:\s]{1,80}:\d+:[0-9a-f]{6}$/.test(data.t)) fail();
+  const queryTicket = new URLSearchParams(location.search).get("ticket");
+  if (queryTicket != null && queryTicket !== data.t.split(":", 1)[0]) fail();
+  const g = data.g;
+  if (!g || typeof g !== "object" || Array.isArray(g) || !text(g.f) || !text(g.s)) fail();
+  if (g.p != null && typeof g.p !== "string") fail();
+  if (!integer(g.m) || g.m < 0 || g.m > 11) fail();
+  if (!integer(data.d) || data.d < 0) fail();
+  if (!Array.isArray(data.r) || !Array.isArray(data.a) || !Array.isArray(data.sp)
+      || new Set(data.sp).size !== data.sp.length || !data.sp.every((kind) => kind === "T" || kind === "S")) fail();
+  const rowIds = new Set();
+  for (const row of data.a) {
+    if (!row || typeof row !== "object" || !integer(row.j) || rowIds.has(row.j) || !text(row.n)
+        || !Number.isFinite(row.h) || row.h < 0 || !integer(row.m) || row.m < 0 || row.m > 11
+        || !forms.has(row.c == null ? "" : row.c) || (row.z != null && row.z !== 1)) fail();
+    rowIds.add(row.j);
+  }
+  const validPlanRow = (j) => integer(j);
+  const validCandidate = (k) => integer(k) && k >= 0 && k < data.a.length;
+  const recordIds = new Set();
+  const statuses = new Set(["v", "m", "?", "x"]);
+  for (const row of data.r) {
+    if (!row || typeof row !== "object" || !integer(row.i) || row.i < 0 || recordIds.has(row.i)
+        || !text(row.n) || !Number.isFinite(row.h) || row.h < 0
+        || !forms.has(row.c == null ? "" : row.c) || !["T", "S"].includes(row.k)
+        || !statuses.has(row.o)) fail();
+    recordIds.add(row.i);
+    if (row.o === "?") {
+      if (!Array.isArray(row.q) || row.q.length === 0 || !row.q.every(validCandidate)) fail();
+    } else if (row.o === "v" || row.o === "m") {
+      // Здесь q — номера строк выбранного листа, включая уже закрытые строки,
+      // которых нет среди открытых a[]. Пустой список допустим для rowless.
+      if (row.q != null && (!Array.isArray(row.q) || !row.q.every(validPlanRow))) fail();
+    } else if (row.q != null && (!Array.isArray(row.q) || !row.q.every(validCandidate))) fail();
+    if (row.p != null && (!Array.isArray(row.p) || !row.p.every((name) => text(name)))) fail();
+    if (row.b != null && (typeof row.b !== "object" || Array.isArray(row.b)
+        || (row.b.who != null && typeof row.b.who !== "string")
+        || (row.b.at != null && typeof row.b.at !== "string")
+        || (row.b.n != null && (!integer(row.b.n) || row.b.n < 1)))) fail();
+    if (row.w != null && typeof row.w !== "string") fail();
+    if (row.e != null && typeof row.e !== "string") fail();
+    if (row.u != null && row.u !== 1) fail();
+  }
+  return data;
+}
+
 async function decode(fragment) {
   const m = /^#v(\d+)\.([A-Za-z0-9_-]+)$/.exec(fragment || "");
-  if (!m) return null;
-  if (m[1] !== "1") throw new Error("страница устарела: данные версии " + m[1] + ", страница знает версию 1 — обновите страницу");
-  if (typeof DecompressionStream !== "function") throw new Error("этот клиент Telegram не умеет разжимать данные — обновите приложение");
-  const b64 = m[2].replace(/-/g, "+").replace(/_/g, "/");
-  const bin = atob(b64 + "===".slice((b64.length + 3) % 4));
-  const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-  return JSON.parse(await new Response(stream).text());
+  if (!m) throw new Error(fragment ? "malformed" : "empty");
+  if (m[1] !== "1") throw new Error("unknown_version");
+  if (typeof DecompressionStream !== "function") throw new Error("decode");
+  try {
+    const b64 = m[2].replace(/-/g, "+").replace(/_/g, "/");
+    const bin = atob(b64 + "===".slice((b64.length + 3) % 4));
+    const bytes = Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return validatePayload(JSON.parse(await new Response(stream).text()));
+  } catch (err) {
+    if (err && err.message === "schema") throw err;
+    throw new Error("decode");
+  }
 }
 
 // ═══ Транспорты (research Р-12) ═════════════════════════════════════════════
@@ -295,6 +369,7 @@ const transport = tgApp && tgApp.initData ? telegramTransport(tgApp) : browserTr
 
 // ═══ Ядро страницы: про транспорт знает только через transport.* ════════════
 let data = null;
+let demoState = false;
 const marks = new Map();      // i → {op, i, j}
 const added = [];             // {op:"add", n, h, c, k}
 const specialty = new Map();  // k → bool
@@ -310,7 +385,7 @@ function markCount() { return marks.size + added.length + specialty.size; }
 
 function refreshMain() {
   const n = markCount();
-  transport.setMain(n ? "Пересчитать (" + n + " " + plural(n, "отметка", "отметки", "отметок") + ")" : "Итог без правок", true);
+  transport.setMain(n ? "Пересчитать (" + n + " " + plural(n, "отметка", "отметки", "отметок") + ")" : "Итог без правок", !!data && !demoState);
 }
 function plural(n, one, few, many) {
   const a = n % 10, b = n % 100;
@@ -362,13 +437,20 @@ function recordCard(r) {
     card.append(el("div", "why", "закрывает: " + ((r.p && r.p.length) ? r.p.map((n) => "«" + n + "»").join(", ") : "строку " + (r.q || []).join(", "))));
   } else if (r.o === "m") {
     const who = r.b ? (r.b.who || "кем — не записано") + (r.b.at ? " · " + r.b.at : "") : "кем — не записано";
-    card.append(el("div", "why", "закрывает " + ((r.p && r.p.length) ? "«" + r.p[0] + "»" : "строку " + (r.q || []).join(", ")) + " по запомненной паре · " + who));
-    const j = (r.q || [0])[0];
-    const undo = el("button", mark && mark.op === "undo_memory" ? "on" : "", "Отменить здесь");
-    undo.onclick = () => setMark(r.i, mark && mark.op === "undo_memory" ? null : { op: "undo_memory", i: r.i, j });
-    const forget = el("button", mark && mark.op === "forget" ? "on" : "", "Забыть пару");
-    forget.onclick = () => setMark(r.i, mark && mark.op === "forget" ? null : { op: "forget", i: r.i, j });
-    acts.append(undo, forget);
+    const rows = r.q || [];
+    card.append(el("div", "why", "закрывает " + ((r.p && r.p.length) ? "«" + r.p[0] + "»" : "строку " + rows.join(", ")) + " по запомненной паре · " + who));
+    const j = rows[0];
+    if (!Number.isSafeInteger(j)) {
+      // Такая цель не пришла из выбранного листа и не может быть адресована
+      // протоколом отметок. Нельзя показывать кнопку, чью отметку сервер отвергнет.
+      card.append(el("div", "why", "У цели нет номера строки выбранного листа; отмена или забывание этой пары на странице недоступны."));
+    } else {
+      const undo = el("button", mark && mark.op === "undo_memory" ? "on" : "", "Отменить здесь");
+      undo.onclick = () => setMark(r.i, mark && mark.op === "undo_memory" ? null : { op: "undo_memory", i: r.i, j });
+      const forget = el("button", mark && mark.op === "forget" ? "on" : "", "Забыть пару");
+      forget.onclick = () => setMark(r.i, mark && mark.op === "forget" ? null : { op: "forget", i: r.i, j });
+      acts.append(undo, forget);
+    }
   } else if (r.o === "?") {
     const row = openRow((r.q || [])[0]);
     if (!row) { card.append(el("div", "why", "строка-кандидат не передана")); card.append(acts); return card; }
@@ -455,7 +537,7 @@ function answer() {
 }
 
 function onSubmit() {
-  if (!data) return;
+  if (!data || demoState) return;
   const text = answer();
   const bytes = new TextEncoder().encode(text).length;
   if (bytes > SEND_LIMIT) {
@@ -469,21 +551,44 @@ function onSubmit() {
 
 async function main() {
   transport.start();
-  try {
-    data = await decode(location.hash);
-  } catch (err) {
-    $("refusal").hidden = false; $("refusal").textContent = "Не удалось открыть перечень: " + err.message;
-    return;
+  const params = new URLSearchParams(location.search);
+  const demoMode = params.get("demo") === "1"
+    && !location.hash
+    && (location.protocol === "file:" || location.hostname === "localhost" || location.hostname === "127.0.0.1");
+  if (demoMode) {
+    data = DEMO;
+    demoState = true;
+    $("demo").hidden = false;
+  } else {
+    try {
+      data = await decode(location.hash);
+    } catch (err) {
+      const reason = err && ["empty", "malformed", "unknown_version", "decode", "schema"].includes(err.message)
+        ? err.message : "decode";
+      recordError(reason);
+      document.body.classList.add("locked");
+      $("refusal").hidden = false;
+      const labels = {
+        empty: "нет данных дела", malformed: "неверный формат ссылки", unknown_version: "страница устарела: неизвестная версия данных",
+        decode: "не удалось распаковать данные", schema: "данные дела не прошли проверку",
+      };
+      $("refusal").textContent = "Не удалось открыть перечень: " + labels[reason] + ". Откройте страницу новой кнопкой из бота.";
+      transport.setMain("Открытие недоступно", false);
+      return;
+    }
   }
-  if (!data) { data = DEMO; $("demo").hidden = false; }
   const g = data.g || {};
-  $("target").textContent = [g.s, g.p, g.m ? "посадка в " + g.m + " семестр" : "", g.f].filter(Boolean).join(" · ");
+  const tokenParts = String(data.t || "").split(":");
+  const ticket = tokenParts[0] || "неизвестно";
+  const fingerprint = tokenParts[2] || "неизвестен";
+  $("target").textContent = ["обращение " + ticket, "цель " + fingerprint, g.s, g.p, g.m ? "посадка в " + g.m + " семестр" : "", g.f].filter(Boolean).join(" · ");
   $("ar").innerHTML = "";
   $("ar").append(document.createTextNode("АР " + data.d + " "), el("small", "", "промежуточный расчёт"));
   renderDiff();
   renderSpecialty();
   setupAdd();
   render();
+  document.body.classList.remove("locked");
   refreshMain();
 }
 main();
