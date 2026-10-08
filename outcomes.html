@@ -293,8 +293,12 @@ function validatePayload(data) {
 }
 
 async function decode(fragment) {
-  const m = /^#v(\d+)\.([A-Za-z0-9_-]+)$/.exec(fragment || "");
-  if (!m) throw new Error(fragment ? "malformed" : "empty");
+  // Telegram дописывает параметры запуска к имеющемуся fragment:
+  // «#v1.<данные>?tgWebAppData=…» (или через «&»). В base64url нет ни «?», ни «&»,
+  // поэтому данные дела — всё до первого из них (АР-L9B0, 07.10.2026).
+  const own = (fragment || "").split(/[?&]/, 1)[0];
+  const m = /^#v(\d+)\.([A-Za-z0-9_-]+)$/.exec(own);
+  if (!m) throw new Error(own ? "malformed" : "empty");
   if (m[1] !== "1") throw new Error("unknown_version");
   if (typeof DecompressionStream !== "function") throw new Error("decode");
   try {
